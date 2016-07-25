@@ -5,7 +5,14 @@
 #include "fsk.h"
 #include "pins.h"
 
+/*
+ * Code currently supports Leonardo board, but should be portable to Uno
+ */
+
+
 PinD13 pinLED;
+PinD4 pinBuzzer;
+
 
 const int timerFrequency = 600;
 
@@ -41,6 +48,7 @@ void setup()
   }
   Serial.begin(9600);
 
+  // Configure Timer1
   byte mode = 14;
   byte presc = 3;
   TCCR1A = (mode & 3);
@@ -53,6 +61,7 @@ void setup()
   sei();
   Serial.println("Reset");
 
+  // Check CRC
   CRC16_CCITT crc;
   uint16_t checksum = crc.update("habitat");
   Serial.print("CRC test value (should be 3EFB): ");
@@ -72,6 +81,7 @@ void loop()
   if (gFlags & (1 << FLAG_SECOND)) {
     gFlags &= ~(1 << FLAG_SECOND);
 
+    // Indicate fix by flashing LED
     char fix = gpsParser.gpsInfo.fix;
     if (fix == '3') {
       ledPeriod = 300;
@@ -79,6 +89,7 @@ void loop()
     else ledPeriod = 30;
     ledBlink = true;
 
+    
     if (!transmitter.isBusy()) {
       flightData.gpsInfo = gpsParser.gpsInfo;
       packetizer.makePacket(flightData);
