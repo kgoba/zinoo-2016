@@ -35,6 +35,15 @@ GPSParser gpsParser;
 UKHASPacketizer packetizer;
 FSKTransmitter transmitter;
 
+class PeriodicTimer {
+public:
+  typedef void (* TimerCallback) (void);
+
+  void setPeriodMillis(uint16_t milliseconds);
+  void setPeriodMicros(uint16_t microseconds);
+
+  void attach(TimerCallback callback);
+};
 
 void setup() 
 {
