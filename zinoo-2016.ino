@@ -1,3 +1,5 @@
+#include <EEPROM.h>
+
 #include "gps.h"
 #include "ukhas.h"
 #include "fstring.h"
@@ -10,24 +12,26 @@
  */
 
 
-PinD13 pinLED;
-PinD4 pinBuzzer;
+PinD13  pinLED;
+PinD4   pinBuzzer;
+PinD5   pinARM;
 
 
-const int timerFrequency = 600;
-
-bool ledBlink = false;
-word ledPeriod = 1;
-
-void gpsBegin();
-byte gpsAvailable();
-byte gpsRead();
-
-volatile byte gFlags;
+const int timerFrequency = 300;
 
 enum {
   FLAG_SECOND
 };
+
+enum State {
+  STATE_RESET,
+  STATE_SAFE,
+  STATE_FLIGHT
+};
+
+
+bool ledBlink = false;
+word ledPeriod = 1;
 
 FlightData flightData;
 
@@ -35,15 +39,8 @@ GPSParser gpsParser;
 UKHASPacketizer packetizer;
 FSKTransmitter transmitter;
 
-class PeriodicTimer {
-public:
-  typedef void (* TimerCallback) (void);
-
-  void setPeriodMillis(uint16_t milliseconds);
-  void setPeriodMicros(uint16_t microseconds);
-
-  void attach(TimerCallback callback);
-};
+volatile byte gFlags;
+State gState;
 
 void setup() 
 {
@@ -86,6 +83,12 @@ void loop()
     gpsParser.parse(c);
   }
 
+  // Read serial console data
+  while (Serial.available() > 0) {
+    char c = Serial.Read();
+    //Serial.print(c);
+  }
+
   // Check flags
   if (gFlags & (1 << FLAG_SECOND)) {
     gFlags &= ~(1 << FLAG_SECOND);
@@ -102,7 +105,6 @@ void loop()
     if (!transmitter.isBusy()) {
       flightData.gpsInfo = gpsParser.gpsInfo;
       packetizer.makePacket(flightData);
-      if (fix == '3') 
         transmitter.transmit(packetizer.getPacketBuffer(), packetizer.getPacketLength() - 1);
     }
   }

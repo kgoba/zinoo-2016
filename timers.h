@@ -61,3 +61,13 @@ public:
   static void disableInterrupt(Interrupt interrupt);
 };
 
+class PeriodicTimer {
+public:
+  typedef void (* TimerCallback) (void);
+
+  void setPeriodMillis(uint16_t milliseconds);
+  void setPeriodMicros(uint16_t microseconds);
+
+  void attach(TimerCallback callback);
+};
+
