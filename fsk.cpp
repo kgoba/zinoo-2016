@@ -20,16 +20,16 @@ void FSKTransmitter::enable() {
   pinTXEnable.mode(IOMode::OutputHigh);
 }
 
+void FSKTransmitter::disable() {
+  pinTXMod.mode(IOMode::OutputLow);
+  pinTXEnable.mode(IOMode::OutputLow);    
+}
+
 void FSKTransmitter::test(byte idx) {
   switch (idx) {
     case 0: pinTXMod.mode(IOMode::OutputHigh); pinTXEnable.mode(IOMode::OutputHigh); break;
     case 1: pinTXMod.mode(IOMode::OutputHigh); pinTXEnable.mode(IOMode::OutputHigh); break;
   }
-}
-
-void FSKTransmitter::disable() {
-  pinTXMod.mode(IOMode::Input);
-  pinTXEnable.mode(IOMode::OutputLow);    
 }
 
 void FSKTransmitter::transmit(const uint8_t *buffer, uint16_t length) {

@@ -4,8 +4,14 @@
 template<byte capacity>
 struct FString {
   FString() { size = 0; }
-  FString(const char *str) { size = strlen(str); size = (size > capacity) ? capacity : size; memcpy(buf, str, this->size); }
+  FString(const char *str) { assign(str); }
   FString(const char *str, byte size) { this->size = (size > capacity) ? capacity : size; memcpy(buf, str, this->size); }
+
+  void assign(const char *str) { 
+    size = strlen(str); 
+    size = (size > capacity) ? capacity : size; 
+    memcpy(buf, str, this->size); 
+  }
 
   template<byte cap2>
   void append(const FString<cap2> &s) {
@@ -20,6 +26,13 @@ struct FString {
     if (newSize > capacity) newSize = capacity;
     memcpy(buf + size, str, newSize - size);
     size = newSize;
+  }
+
+  void append(const char *str, uint8_t size) {
+    word newSize = this->size + size;
+    if (newSize > capacity) newSize = capacity;
+    memcpy(buf + this->size, str, newSize - this->size);
+    this->size = newSize;
   }
 
   void append(char c) {
@@ -48,6 +61,18 @@ struct FString {
 
   void clear() {
     size = 0;
+  }
+
+  uint16_t toUInt16() {
+    uint16_t result = 0;
+    char *ptr = buf;
+    while (*ptr) {
+      if (*ptr > '9' || *ptr < '0') break;
+      result *= 10;
+      result += (*ptr - '0');
+      ptr++;
+    }
+    return result;
   }
 
   byte size;

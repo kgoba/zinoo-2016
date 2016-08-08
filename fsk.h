@@ -16,8 +16,8 @@ public:
   bool isBusy();
 
 private:
-  PinD2   pinTXMod;
-  PinD3   pinTXEnable;
+  IOPin<GPIOC, 1>   pinTXMod;
+  IOPin<GPIOC, 2>   pinTXEnable;
 
   const uint8_t * txBuffer;
   uint16_t  txLength;
