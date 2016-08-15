@@ -5,12 +5,25 @@ template<byte capacity>
 struct FString {
   FString() { size = 0; }
   FString(const char *str) { assign(str); }
-  FString(const char *str, byte size) { this->size = (size > capacity) ? capacity : size; memcpy(buf, str, this->size); }
+  FString(const char *str, byte size) { assign(str, size); }
 
   void assign(const char *str) { 
     size = strlen(str); 
     size = (size > capacity) ? capacity : size; 
     memcpy(buf, str, this->size); 
+  }
+
+  void assign(const char *str, byte size) { 
+    this->size = (size > capacity) ? capacity : size; 
+    memcpy(buf, str, this->size);
+  }
+
+  template<byte cap2>
+  void assign(const FString<cap2> &s) {
+    word newSize = s.size;
+    if (newSize > capacity) newSize = capacity;
+    memcpy(buf, s.buf, newSize);
+    size = newSize;
   }
 
   template<byte cap2>
@@ -59,6 +72,18 @@ struct FString {
     }
   }
 
+  template<uint8_t N>
+  FString<N> substr(uint8_t index) {
+    uint8_t newSize = N;
+    if (index >= size) {
+      newSize = 0;
+    }
+    else if (newSize + index > size) {
+      newSize = size - index;
+    }
+    return FString<N>(buf + index, newSize);
+  }
+
   void clear() {
     size = 0;
   }
@@ -73,6 +98,17 @@ struct FString {
       ptr++;
     }
     return result;
+  }
+
+  char operator [] (int8_t index) {
+    if (size == 0) return '\0';
+    while (index < 0) {
+      index += size;
+    }
+    while (index >= size) {
+      index -= size;
+    }
+    return buf[index];
   }
 
   byte size;

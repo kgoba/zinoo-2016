@@ -37,9 +37,9 @@ void FSKTransmitter::transmit(const uint8_t *buffer, uint16_t length) {
   txBuffer = buffer;
   txLength = length;
   if (txLength > 0) {
+    active = true;
     enable();
     shiftNew();
-    active = true;
   }
 }
 

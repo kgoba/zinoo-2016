@@ -16,6 +16,8 @@ public:
   static void makeTable();
 
 private:
+  uint16_t getRemainder(uint8_t dividend);
+  
   uint16_t remainder;
   
   static uint16_t  crcTable[256];
@@ -44,18 +46,10 @@ void CRC16<polynomial, reverse, initialValue>::clear()
 }
 
 template<uint16_t polynomial, bool reverse, uint16_t initialValue>
-void CRC16<polynomial, reverse, initialValue>::makeTable(void)
+uint16_t CRC16<polynomial, reverse, initialValue>::getRemainder(uint8_t dividend)
 {
-  if (tableReady) return;
-  
-  uint16_t  remainder;
-
-  /*
-   * Compute the remainder of each possible dividend.
-   */
-  for (uint16_t dividend = 0; dividend < 256; ++dividend)
-  {
-      /*
+  uint16_t remainder;
+       /*
        * Start with the dividend followed by zeros.
        */
       if (reverse) {
@@ -94,11 +88,25 @@ void CRC16<polynomial, reverse, initialValue>::makeTable(void)
             }
          }
       }
+      return remainder;
+}
 
+template<uint16_t polynomial, bool reverse, uint16_t initialValue>
+void CRC16<polynomial, reverse, initialValue>::makeTable(void)
+{
+  if (tableReady) return;
+  
+  uint16_t  remainder;
+
+  /*
+   * Compute the remainder of each possible dividend.
+   */
+  for (uint16_t dividend = 0; dividend < 256; ++dividend)
+  {
       /*
        * Store the result into the table.
        */
-      crcTable[dividend] = remainder;
+      //crcTable[dividend] = getRemainder(dividend);
   }
   tableReady = true;
 }  
@@ -111,11 +119,13 @@ uint16_t CRC16<polynomial, reverse, initialValue>::update(uint8_t value)
    */
   if (reverse) {
     uint8_t data = value ^ remainder;
-    remainder = crcTable[data] ^ (remainder >> 8);
+    //remainder = crcTable[data] ^ (remainder >> 8);
+    remainder = getRemainder(data) ^ (remainder >> 8);
   }
   else {
     uint8_t data = value ^ (remainder >> 8);
-    remainder = crcTable[data] ^ (remainder << 8);
+    //remainder = crcTable[data] ^ (remainder << 8);
+    remainder = getRemainder(data) ^ (remainder << 8);
   }
 
   /*

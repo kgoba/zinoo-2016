@@ -11,6 +11,9 @@ public:
   void transmit(const uint8_t *buffer, uint16_t length);
   void tick();
 
+  void mark();
+  void space();
+
   void test(byte idx);
 
   bool isBusy();
@@ -26,8 +29,6 @@ private:
   bool      autoShutdown;
   bool      active;
 
-  void mark();
-  void space();
   void shiftNew();
 };
 

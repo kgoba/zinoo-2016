@@ -15,62 +15,12 @@
  * Code currently supports Leonardo and Pro Mini (328P @ 3.3V)
  */
 
-const char PROGMEM compile_date[] = __DATE__ " " __TIME__;
+const char compile_date[] = __DATE__ " " __TIME__;
 
-enum DebugMode {
-  DbgConsole,
-  DbgNMEA,
-  DbgUKHAS
-};
-
-struct PersistentConfig {
-  uint16_t  id;
-
-  char      payloadName[6];
-
-  // Last stored GPS fix info
-  uint16_t  lastAltitude;
-  char      lastLatitude[7];
-  char      lastLongitude[7];
-  char      lastTime[6]; 
-
-  uint8_t disableTX       : 1;
-  uint8_t disableLastFix  : 1;
-  
-  DebugMode debugMode;    // Debug console mode
-
-  PersistentConfig() {
-  }
-
-  void defaults() {
-    id = 0;
-    strncpy(payloadName, "ZGND", 6);
-    lastAltitude = 0;
-    lastLatitude[0] = '\0';
-    lastLongitude[0] = '\0';
-    memcpy(lastTime, "000000", 6);
-
-    disableTX = true;
-    disableLastFix = false;
-    
-    debugMode = DbgConsole;    
-  }
-
-  void save() {
-    eeprom_write_block(&nvPersistentConfig, (void *)this, sizeof(*this));
-    id++;
-  }
-
-  void restore() {
-    eeprom_read_block((void *)this, &nvPersistentConfig, sizeof(*this));
-    if (id == 0xFFFF) defaults();
-  }
-
-  static PersistentConfig EEMEM nvPersistentConfig;
-};
 
 enum {
-  FLAG_SECOND
+  FLAG_SECOND,
+  FLAG_TXSLOT
 };
 
 enum State {
@@ -79,6 +29,13 @@ enum State {
   STATE_FLIGHT
 };
 
+enum TXState {
+  TXSTATE_IDLE,
+  TXSTATE_PREAMBLE,
+  TXSTATE_CARRIER,
+  TXSTATE_TRANSMIT,
+  TXSTATE_TEST
+};
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // Global variables
@@ -89,8 +46,8 @@ bool ledBlink = false;
 word ledPeriod = 1;
 
 // This just reserves space in EEPROM for the non-volatile configuration
-PersistentConfig EEMEM PersistentConfig::nvPersistentConfig;    
-PersistentConfig config;  // this is volatile configuration in RAM
+Config EEMEM Config::nvConfig;    
+Config Config::config;  // this is volatile configuration in RAM
 
 FlightData flightData;  // current payload data
 
@@ -105,6 +62,7 @@ volatile byte gFlags;
 
 char        gTime[6];
 State       gState;
+TXState     gTXState;
 
 PinLED    pinLED;
 PinARM    pinARM;
@@ -131,6 +89,7 @@ void testPressureFormula() {
 void setup() 
 {
   gState = STATE_RESET;
+  gTXState = TXSTATE_IDLE;
 
   // Setup GPIO lines
   pinBuzzer.mode(IOMode::OutputLow);
@@ -165,8 +124,8 @@ void setup()
   // Initialize GPS software serial
   gpsBegin();
 
-  config.restore();
-  packetizer.setPayloadName(config.payloadName);
+  Config::restore();
+  packetizer.setPayloadName(Config::config.payloadName);
 
   // Enable interrupts
   sei();
@@ -180,6 +139,8 @@ void setup()
   Serial.println(checksum, HEX);
 
   barometer.initialize();
+
+  Serial.print("> ");
 }
 
 
@@ -190,10 +151,129 @@ void setup()
 // checks time, builds UKHAS packet and initiates radio transmission of it
 //
 
-FString<32> consoleCmd;
+template<byte N> void print(const FString<N> &str) {
+  for (uint8_t idx = 0; idx < str.size; idx++) {
+    Serial.print(str.buf[idx]);
+  }
+}
 
-void parseCommand() {
-  
+void parseCommand(const char *command) 
+{
+  const char *ptr1 = command;
+  const char *ptr2 = command;
+
+  enum CmdType {
+    kCommandUnknown,
+    kCommandId,
+    kCommandTX,
+    kCommandPkt,
+    kCommandVer,
+    kCommandGPS,
+    kCommandBaro,
+    kCommandSave
+  };
+
+  uint8_t idx = 0;
+  CmdType cmd = kCommandUnknown;
+
+  while (*ptr1 != 0) {
+    ptr2 = ptr1;
+    while (*ptr2 != ' ') {
+      ptr2++;
+      if (*ptr2 == 0) break;
+    }
+    uint8_t len = ptr2 - ptr1;
+
+    if (idx == 0) {
+      if (strncmp(ptr1, "id", len) == 0) {
+        cmd = kCommandId;
+      }
+      else if (strncmp(ptr1, "pkt", len) == 0) {
+        cmd = kCommandPkt;
+      }
+      else if (strncmp(ptr1, "baro", len) == 0) {
+        cmd = kCommandBaro;
+      }
+      else if (strncmp(ptr1, "tx", len) == 0) {
+        cmd = kCommandTX;
+      }      
+      else if (strncmp(ptr1, "save", len) == 0) {
+        cmd = kCommandSave;
+      }
+      else if (strncmp(ptr1, "ver", len) == 0) {
+        cmd = kCommandVer;
+      }      
+      else if (strncmp(ptr1, "gps", len) == 0) {
+        cmd = kCommandGPS;
+      }      
+    }
+    else if (idx == 1) {
+      bool success = false;
+      switch (cmd) {
+        case kCommandId: 
+          Config::config.payloadName.assign(ptr1, len);
+          packetizer.setPayloadName(Config::config.payloadName); 
+          success = true; 
+          break; 
+        case kCommandTX: 
+          if (len == 1) {
+            if (*ptr1 == '0') {
+              Config::config.enableTX = 0;
+              success = true;
+            }
+            else if (*ptr1 == '1') {
+              Config::config.enableTX = 1;
+              success = true;
+            }
+            else if (*ptr1 == 't') {
+              gTXState = TXSTATE_TEST;
+              transmitter.enable();
+              success = true;
+            }
+          }
+          break;
+      }
+      if (success) {
+        Serial.println("OK");
+      }
+      else {
+        Serial.println("ERROR");
+      }
+    }
+
+    ptr1 = ptr2;
+    while (*ptr1 == ' ') {
+      ptr1++;
+      if (*ptr1 == 0) break;
+    }
+    idx++;
+  }
+
+  if (idx == 1) {
+    switch (cmd) {
+      case kCommandSave: 
+        Config::save();
+        Serial.println("OK");
+        break;
+      case kCommandVer: 
+        Serial.println(compile_date);
+        break;
+      case kCommandGPS: 
+        gpsParser.gpsInfo.print();
+        break;
+      case kCommandId: print(Config::config.payloadName); Serial.println(); break;     
+      case kCommandTX: Serial.println(Config::config.enableTX); break;     
+      case kCommandPkt: Serial.print((const char *)packetizer.getPacketBuffer()); break;
+      case kCommandBaro:       
+        Serial.print("P: ");
+        Serial.print((uint32_t)barometer.getPressure() * 4);
+        Serial.print(" H: ");
+        Serial.println(barometer.getAltitude());
+        break;
+      default:
+        Serial.println("?");
+    }
+  }
 }
 
 void loop() 
@@ -205,16 +285,54 @@ void loop()
     gpsParser.parse(c);
   }
 
+  static FString<32> consoleCmd;
+
   // Read serial console data
   while (Serial.available() > 0) {
     char c = Serial.read();
-    Serial.print(c);
-    if (c != 0x0D && c != 0x0A) {
+    if (c != '\x0D' && c != '\x0A') {
       consoleCmd.append(c);
+      Serial.print(c);                    // Echo back
     }
-    else {
-      parseCommand();
+    else if (consoleCmd.size > 0) {
+      Serial.println();
+      consoleCmd.append('\0');
+      parseCommand(consoleCmd.buf);
+      consoleCmd.clear();
+      Serial.print("> ");
     }
+  }
+
+  static uint8_t preambleIdx;
+  
+  switch (gTXState) {
+    case TXSTATE_IDLE:
+      if (!transmitter.isBusy()) {
+        transmitter.disable();
+      }
+      break;
+
+    case TXSTATE_PREAMBLE:
+      if (!transmitter.isBusy()) {
+        if (preambleIdx < 80) {
+          transmitter.transmit("RY", 2);
+        }
+        else {
+          transmitter.transmit("\r\n", 2);
+          if (preambleIdx >= 82) {
+            gTXState = TXSTATE_TRANSMIT;
+            preambleIdx = 0;
+          }
+        }
+        preambleIdx++;
+      }
+      break;
+    case TXSTATE_TRANSMIT:
+      if (!transmitter.isBusy()) {       
+        packetizer.makePacket(flightData);
+        transmitter.transmit(packetizer.getPacketBuffer(), packetizer.getPacketLength() - 1);
+      }
+      break;
   }
 
   // Check flags
@@ -228,27 +346,49 @@ void loop()
     }
     else ledPeriod = 30;
     ledBlink = true;
-    
-    if (!transmitter.isBusy()) {
-      barometer.update();
-      Serial.print("P: ");
-      Serial.print((uint32_t)barometer.getPressure() * 4);
-      Serial.print(" H: ");
-      Serial.print(barometer.getAltitude());
-      Serial.print(' ');
 
-      //gpsParser.gpsInfo.print();
-      flightData.updateGPS( gpsParser.gpsInfo );
-      flightData.updateTemperature();
+    static bool txPhase;
+    if (gTXState == TXSTATE_TEST) {
+      txPhase = !txPhase;
+      if (txPhase) transmitter.mark();
+      else transmitter.space();
+    }
 
-      packetizer.makePacket(flightData);
-      //if (fix == '3') 
-      {
-        //transmitter.transmit(packetizer.getPacketBuffer(), packetizer.getPacketLength() - 1);
-        //transmitter.transmit((const uint8_t *)"TX 0123456789\n", 11);
-      }
+    if (barometer.update()) {
+      flightData.pressure = barometer.getPressure();
+      flightData.barometricAltitude = barometer.getAltitude();
+    }
+
+    //gpsParser.gpsInfo.print();
+    flightData.updateGPS( gpsParser.gpsInfo );
+    flightData.updateTemperature();
+
+    if (Config::config.enableTX) {
+      // Check TX time division
+      int8_t minutes = flightData.getMinutes();
+      int8_t seconds = flightData.getSeconds();
+      if (minutes >= 0) {     // Check for valid time
+        char myId = Config::config.payloadName[-1]; // Get the last character of payload name
+        if (myId >= '0' && myId <= '9') {
+          myId -= '0';
+          if (minutes % 6 == myId) {
+            if (gTXState == TXSTATE_IDLE) {
+              gTXState = TXSTATE_CARRIER;
+              transmitter.enable();
+            }
+            else if (gTXState == TXSTATE_CARRIER && seconds > 10) {
+              gTXState = TXSTATE_TRANSMIT;
+            }
+          }
+          else {
+            gTXState = TXSTATE_IDLE;
+          }
+        }
+      }    
     }
   }
+
+  delay(1);
 }
 
 

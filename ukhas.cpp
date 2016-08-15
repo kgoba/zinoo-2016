@@ -7,6 +7,8 @@ FlightData::FlightData() {
   temperatureInternal = 0;
   temperatureExternal = 0;
   batteryVoltage = 0;
+  pressure = 0;
+  barometricAltitude = 0;
   status = 0;
 }
 
@@ -17,6 +19,24 @@ void FlightData::updateGPS(const GPSInfo &gps) {
 
   altitude = FString<8>(gps.altitude).toUInt16();
   satCount = gps.satCount;
+}
+
+int8_t FlightData::getSeconds() {
+  if (time.size < 6) return -1;
+  FString<2> seconds = time.substr<2>(4);
+  return seconds.toUInt16();
+}
+
+int8_t FlightData::getMinutes() {
+  if (time.size < 6) return -1;
+  FString<2> minutes = time.substr<2>(2);
+  return minutes.toUInt16();
+}
+
+void FlightData::updateTime() {  
+}
+
+void FlightData::print() {
 }
 
 int8_t convertTemperature(uint16_t rawADC) {
@@ -64,11 +84,11 @@ void FlightData::updateTemperature() {
 
 UKHASPacketizer::UKHASPacketizer(const char *payloadName) {
   sentenceID = 1;
-  this->payloadName = payloadName;
+  setPayloadName(payloadName);
 }
 
 void UKHASPacketizer::setPayloadName(const char *payloadName) {
-  this->payloadName = payloadName;
+  this->payloadName.assign(payloadName);
 }
 
 void UKHASPacketizer::makePacket(const FlightData &data) {
@@ -105,10 +125,21 @@ void UKHASPacketizer::makePacket(const FlightData &data) {
   packet.append(','); packet.append(data.time);
 
   packet.append(','); packet.append(satCount);
-  packet.append(','); packet.append(tempInt);
-  packet.append(','); packet.append(tempExt);
+  
+  //packet.append(','); packet.append(tempInt);
+  packet.append(','); packet.append(data.temperatureInternal);
+  
+  //packet.append(','); packet.append(tempExt);
+  packet.append(','); packet.append(data.temperatureExternal);
+  
   packet.append(','); packet.append(battVoltage);
   packet.append(','); packet.append(statusChar);
+  if (data.pressure > 0) {
+    uint16_t pressureMBar = (data.pressure + 12) / 25;
+    packet.append(pressureMBar);
+    packet.append('/');
+    packet.append(data.barometricAltitude);
+  }
 
   // Now compute CRC checksum and append it
   crc.clear();
@@ -121,7 +152,7 @@ void UKHASPacketizer::makePacket(const FlightData &data) {
 
   // Add terminating zero and print (only for debug)
   packet.append('\0');
-  Serial.print(packet.buf);
+  //Serial.print(packet.buf);
 
   sentenceID++;
 }
