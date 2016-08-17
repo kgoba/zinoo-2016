@@ -17,7 +17,7 @@ void FlightData::updateGPS(const GPSInfo &gps) {
   latitude.assign(gps.latitude);
   longitude.assign(gps.longitude);
 
-  altitude = FString<8>(gps.altitude).toUInt16();
+  altitude = atoi(gps.altitude);
   satCount = gps.satCount;
 }
 
@@ -37,6 +37,25 @@ void FlightData::updateTime() {
 }
 
 void FlightData::print() {
+  Serial.print("FD: ");
+  if (fix == '3') Serial.print("3D fix ");
+  time.print(); Serial.print(" ");
+  if (latitude.size > 0) {
+    latitude.print(); Serial.print("N ");
+  }
+  if (longitude.size > 0) {
+    longitude.print(); Serial.print("E ");
+  }
+  Serial.print(altitude); Serial.print("m ");
+  Serial.print(satCount); Serial.print(" ");
+  if (pressure > 0) {
+    Serial.print(4 * (uint32_t)pressure); Serial.print("Pa ");
+    Serial.print(barometricAltitude); Serial.print("m ");
+  }
+  Serial.print(temperatureInternal); Serial.print("C ");
+  Serial.print(temperatureExternal); Serial.print("C ");
+  Serial.print(batteryVoltage / 100.0); Serial.print("V ");
+  Serial.println();
 }
 
 int8_t convertTemperature(uint16_t rawADC) {

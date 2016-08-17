@@ -91,11 +91,13 @@ struct FString {
   uint16_t toUInt16() {
     uint16_t result = 0;
     char *ptr = buf;
-    while (*ptr) {
+    uint8_t remaining = size;
+    while (remaining > 0) {
       if (*ptr > '9' || *ptr < '0') break;
       result *= 10;
       result += (*ptr - '0');
       ptr++;
+      remaining--;
     }
     return result;
   }
@@ -109,6 +111,12 @@ struct FString {
       index -= size;
     }
     return buf[index];
+  }
+
+  void print() {
+    for (uint8_t idx = 0; idx < size; idx++) {
+      Serial.print(buf[idx]);
+    }    
   }
 
   byte size;

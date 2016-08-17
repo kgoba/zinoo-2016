@@ -8,12 +8,12 @@
 struct FlightData {
   FlightData();
 
-  uint16_t altitude;
+  char fix;
+  FString<6> time;
   FString<7> latitude;
   FString<7> longitude;
-  FString<6> time;
+  uint16_t altitude;
   uint8_t satCount;
-  char fix;
 
   uint16_t pressure;
   uint16_t barometricAltitude;

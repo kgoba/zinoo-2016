@@ -80,7 +80,6 @@ void testPressureFormula() {
   }  
 }
 
-
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // Initialization and setup after MCU reset
 // 
@@ -109,6 +108,7 @@ void setup()
     }
   }
   Serial.begin(9600);
+  Serial.println("Reset");
 
   // Set ADC reference from AVCC, set clock prescaler 1:16
   adcSetup(ADCRefSupply, 4);
@@ -130,16 +130,22 @@ void setup()
   // Enable interrupts
   sei();
   
-  Serial.println("Reset");
+  Config::config.payloadName.print();
+  Serial.print(" ver. ");
+  Serial.println(compile_date);
+
+  if (barometer.initialize()) {
+    Serial.println("Barometer OK");
+  }
+  else {
+    Serial.println("No barometer found");
+  }
 
   // Check CRC algorithm validity
   CRC16_CCITT crc;
   uint16_t checksum = crc.update("habitat");
-  Serial.print("CRC test value (should be 3EFB): ");
-  Serial.println(checksum, HEX);
-
-  barometer.initialize();
-
+  Serial.println((checksum == 0x3EFB) ? "CRC ok" : "CRC error");
+  
   Serial.print("> ");
 }
 
@@ -151,10 +157,35 @@ void setup()
 // checks time, builds UKHAS packet and initiates radio transmission of it
 //
 
-template<byte N> void print(const FString<N> &str) {
-  for (uint8_t idx = 0; idx < str.size; idx++) {
-    Serial.print(str.buf[idx]);
-  }
+void cameraCommand(uint8_t command) {
+  /*
+  0 - rec/#off (R/W)
+  1 - error (RO)
+  2 - offline (RO)
+  3 - charging(RO)
+  4 -
+  5 -
+  6 -
+  7 - executing command (RO)
+  */
+
+  bus.setSlow();
+  bus.write(0x23, &command, 1);
+}
+
+void cameraRecord() {
+  cameraCommand(0x01);
+}
+
+void cameraStop() {
+  cameraCommand(0x00);
+}
+
+uint8_t cameraStatus() {
+  uint8_t status;
+  bus.setSlow();
+  bus.read(0x23, &status, 1);
+  return status;
 }
 
 void parseCommand(const char *command) 
@@ -168,8 +199,8 @@ void parseCommand(const char *command)
     kCommandTX,
     kCommandPkt,
     kCommandVer,
-    kCommandGPS,
-    kCommandBaro,
+    kCommandCam,
+    kCommandStat,
     kCommandSave
   };
 
@@ -191,11 +222,11 @@ void parseCommand(const char *command)
       else if (strncmp(ptr1, "pkt", len) == 0) {
         cmd = kCommandPkt;
       }
-      else if (strncmp(ptr1, "baro", len) == 0) {
-        cmd = kCommandBaro;
-      }
       else if (strncmp(ptr1, "tx", len) == 0) {
         cmd = kCommandTX;
+      }      
+      else if (strncmp(ptr1, "stat", len) == 0) {
+        cmd = kCommandStat;
       }      
       else if (strncmp(ptr1, "save", len) == 0) {
         cmd = kCommandSave;
@@ -203,9 +234,9 @@ void parseCommand(const char *command)
       else if (strncmp(ptr1, "ver", len) == 0) {
         cmd = kCommandVer;
       }      
-      else if (strncmp(ptr1, "gps", len) == 0) {
-        cmd = kCommandGPS;
-      }      
+      else if (strncmp(ptr1, "cam", len) == 0) {
+        cmd = kCommandCam;
+      }   
     }
     else if (idx == 1) {
       bool success = false;
@@ -232,6 +263,18 @@ void parseCommand(const char *command)
             }
           }
           break;
+        case kCommandCam: 
+          if (len == 1) {
+            if (*ptr1 == '0') {
+              cameraStop();
+              success = true;
+            }
+            else if (*ptr1 == '1') {
+              cameraRecord();
+              success = true;
+            }
+          }
+          break;          
       }
       if (success) {
         Serial.println("OK");
@@ -258,23 +301,24 @@ void parseCommand(const char *command)
       case kCommandVer: 
         Serial.println(compile_date);
         break;
-      case kCommandGPS: 
-        gpsParser.gpsInfo.print();
-        break;
-      case kCommandId: print(Config::config.payloadName); Serial.println(); break;     
+      case kCommandId: Config::config.payloadName.print(); Serial.println(); break;     
       case kCommandTX: Serial.println(Config::config.enableTX); break;     
       case kCommandPkt: Serial.print((const char *)packetizer.getPacketBuffer()); break;
-      case kCommandBaro:       
-        Serial.print("P: ");
-        Serial.print((uint32_t)barometer.getPressure() * 4);
-        Serial.print(" H: ");
-        Serial.println(barometer.getAltitude());
+      case kCommandStat:       
+        Serial.print("Uptime: "); Serial.println(millis() / 1000);
+        gpsParser.gpsInfo.print();
+        flightData.print();
+        break;
+      case kCommandCam: 
+        Serial.println(cameraStatus(), HEX);
         break;
       default:
         Serial.println("?");
     }
   }
 }
+
+const char *testString = "AAAAA";
 
 void loop() 
 {
@@ -333,6 +377,11 @@ void loop()
         transmitter.transmit(packetizer.getPacketBuffer(), packetizer.getPacketLength() - 1);
       }
       break;
+    case TXSTATE_TEST:
+      if (!transmitter.isBusy()) {     
+        transmitter.transmit(testString, 5);
+      }
+      break;
   }
 
   // Check flags
@@ -347,12 +396,14 @@ void loop()
     else ledPeriod = 30;
     ledBlink = true;
 
+    /*
     static bool txPhase;
     if (gTXState == TXSTATE_TEST) {
       txPhase = !txPhase;
       if (txPhase) transmitter.mark();
       else transmitter.space();
     }
+    */
 
     if (barometer.update()) {
       flightData.pressure = barometer.getPressure();
@@ -385,6 +436,9 @@ void loop()
           }
         }
       }    
+    }
+    else {
+      transmitter.disable();
     }
   }
 

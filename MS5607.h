@@ -7,6 +7,8 @@ public:
 
   byte write(byte address, const char *buffer, byte bufSize);
   byte read(byte address, char *buffer, byte bufSize);
+  void setSlow();
+  void setNormal();
   
 private:
   int rxTimeout;
