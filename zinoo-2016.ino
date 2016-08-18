@@ -20,7 +20,6 @@ const char compile_date[] = __DATE__ " " __TIME__;
 
 enum {
   FLAG_SECOND,
-  FLAG_TXSLOT
 };
 
 enum State {
@@ -315,10 +314,10 @@ void loop()
     case TXSTATE_PREAMBLE:
       if (!transmitter.isBusy()) {
         if (preambleIdx < 80) {
-          transmitter.transmit("RY", 2);
+          transmitter.transmit((const uint8_t *)"RY", 2);
         }
         else {
-          transmitter.transmit("\r\n", 2);
+          transmitter.transmit((const uint8_t *)"\r\n", 2);
           if (preambleIdx >= 82) {
             gTXState = TXSTATE_TRANSMIT;
             preambleIdx = 0;
@@ -376,7 +375,7 @@ void loop()
               gTXState = TXSTATE_CARRIER;
               transmitter.enable();
             }
-            else if (gTXState == TXSTATE_CARRIER && seconds > 10) {
+            else if (gTXState == TXSTATE_CARRIER && seconds >= 10) {
               gTXState = TXSTATE_TRANSMIT;
             }
           }
