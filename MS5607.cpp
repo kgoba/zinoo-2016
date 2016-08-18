@@ -28,6 +28,19 @@ byte I2C::read(byte address, char *buffer, byte bufSize) {
   return 0;
 }
 
+void I2C::setSlow() {
+  // F_CPU / (16 + 2*TWBR*prescaler)
+  // Prescaler: 1/4/16/64
+  TWBR = 92;
+  TWSR = 0;   // Prescaler: /1
+}
+
+void I2C::setNormal() {
+  // F_CPU / (16 + 2*TWBR*prescaler)
+  // Prescaler: 1/4/16/64
+  TWBR = 32;
+  TWSR = 0;   // Prescaler: /1
+}
 
 
 MS5607::MS5607(I2C &bus, byte subAddress) : _bus(bus) {
@@ -101,11 +114,21 @@ Barometer::Barometer(I2C &bus, byte subaddress)
 
 bool Barometer::initialize() 
 {
-  for (byte idx = 0; idx < 7; idx++) {
-    if (!readPROM(idx, PROM[idx])) 
-      return false;
+  uint8_t nTry = 3;
+
+  while (nTry > 0) {
+    bool success = true;
+    for (byte idx = 0; idx < 7; idx++) {
+      if (!readPROM(idx, PROM[idx])) {
+        success = false;
+        break;
+      }
+    }
+    if (success) return true;
+    nTry--;
+    delay(30);
   }
-  return true;
+  return false;
 }
 
 /**

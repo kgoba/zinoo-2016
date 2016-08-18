@@ -39,8 +39,7 @@ void GPSInfo::setSatCount(const char *satCount) {
 }  
 
 void GPSInfo::print() {
-  Serial.print(millis() / 1000);
-  Serial.print(':');
+  Serial.print("GPS:");
   if (fix) {
     Serial.print(" Fix: "); 
     Serial.print(fix);

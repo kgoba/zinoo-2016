@@ -50,7 +50,7 @@ bool FSKTransmitter::isBusy() {
 void FSKTransmitter::tick() {
   if (!active) return;
   
-  if (bitIndex == 0) {
+  if (bitIndex == 10) {
     if (txLength > 0) 
       shiftNew();
     else {
@@ -61,27 +61,26 @@ void FSKTransmitter::tick() {
         mark();
       }
       active = false;
+      return;
     }
   }
-  if (bitIndex > 0) {
-    if (bitIndex == 9) {
-      space();
-    }
-    else if (bitIndex == 1) {
-      mark();
-    }
-    else {
-      if (txShift & 1) mark();
-      else space();
+  if (bitIndex == 0) {
+    space();
+  }
+  else if (bitIndex >= 8) {
+    mark();
+  }
+  else {
+    if (txShift & 1) mark();
+    else space();
 
-      txShift >>= 1;
-    }
-    bitIndex--;
+    txShift >>= 1;
   }
+  bitIndex++;
 }
 
 void FSKTransmitter::shiftNew() {
   txShift = *txBuffer++;
   txLength--;
-  bitIndex = 9;
+  bitIndex = 0;
 }

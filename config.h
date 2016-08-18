@@ -39,6 +39,7 @@ struct Config {
   DebugMode debugMode;    // Debug console mode
 
   static void defaults() {
+    Serial.println("No EEPROM data found, configuring default settings");
     config.blockId = 0;
     config.payloadName.assign("ZGND");
     config.lastAltitude = 0;
@@ -58,8 +59,8 @@ struct Config {
 
   static void restore() {
     eeprom_read_block((void *)&config, &nvConfig, sizeof(config));
-    Serial.print("EEPROM block id: ");
-    Serial.println(config.blockId);
+    //Serial.print("EEPROM block id: ");
+    //Serial.println(config.blockId);
     if (config.blockId == 0xFFFF) defaults();
     config.blockId++;
   }
