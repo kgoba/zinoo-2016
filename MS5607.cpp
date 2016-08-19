@@ -31,7 +31,8 @@ byte I2C::read(byte address, char *buffer, byte bufSize) {
 void I2C::setSlow() {
   // F_CPU / (16 + 2*TWBR*prescaler)
   // Prescaler: 1/4/16/64
-  TWBR = 92;
+  //TWBR = 92;
+  TWBR = 64;
   TWSR = 0;   // Prescaler: /1
 }
 

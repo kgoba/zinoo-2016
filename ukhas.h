@@ -12,8 +12,8 @@ struct FlightData {
   FString<6> time;
   FString<7> latitude;
   FString<7> longitude;
-  uint16_t altitude;
-  uint8_t satCount;
+  uint16_t   altitude;
+  uint8_t    satCount;
 
   uint16_t pressure;
   uint16_t barometricAltitude;
@@ -48,12 +48,10 @@ public:
   }
   
   void makePacket(const FlightData &data);
-
-  
+ 
   const uint8_t *getPacketBuffer();
   uint8_t getPacketLength();
 
-private:
   uint16_t    sentenceID;
   FString<6>  payloadName;
   

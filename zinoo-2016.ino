@@ -1,4 +1,6 @@
-#include <EEPROM.h>
+//#include <EEPROM.h>
+#include <avr/eeprom.h>
+#include <avr/sleep.h>
 
 #include "gps.h"
 #include "ukhas.h"
@@ -8,6 +10,7 @@
 #include "adc.h"
 #include "pins.h"
 #include "MS5607.h"
+#include "buzzer.h"
 
 #include "config.h"
 
@@ -20,6 +23,7 @@ const char compile_date[] = __DATE__ " " __TIME__;
 
 enum {
   FLAG_SECOND,
+  FLAG_MINUTE
 };
 
 enum State {
@@ -41,12 +45,12 @@ enum TXState {
 // 
 // 
 
-bool ledBlink = false;
-word ledPeriod = 1;
-
 // This just reserves space in EEPROM for the non-volatile configuration
 Config EEMEM Config::nvConfig;    
 Config Config::config;  // this is volatile configuration in RAM
+
+ResetState EEMEM nvResetState;      // Last stored GPS fix info
+ResetState gResetState;
 
 FlightData flightData;  // current payload data
 
@@ -60,17 +64,19 @@ FSKTransmitter transmitter;
 volatile byte gFlags;
 
 char        gTime[6];
+
+uint16_t    gTimeSinceReset;
 State       gState;
 TXState     gTXState;
+uint16_t    gTimeToFix;
+uint8_t     gCameraStatus;
 
-PinLED    pinLED;
 PinARM    pinARM;
-PinBuzzer pinBuzzer;
 
 void testPressureFormula() {
-  Serial.print("Pressure");
+  Serial.print(F("Pressure"));
   Serial.print('\t');
-  Serial.println("Altitude");
+  Serial.println(F("Altitude"));
   for (uint16_t pressure = 250; pressure < 26000; pressure += 250) {
     uint16_t altitude = barometer.getAltitude(pressure);
     Serial.print((uint32_t)pressure * 4);
@@ -90,13 +96,10 @@ void setup()
   gTXState = TXSTATE_IDLE;
 
   // Setup GPIO lines
-  pinBuzzer.mode(IOMode::OutputLow);
-  pinLED.mode(IOMode::OutputHigh);
+  buzzerBegin();
+  ledBegin();
 
-  // Short beep
-  pinBuzzer.write(1);
-  delay(250);
-  pinBuzzer.write(0);
+  buzzerBeep();
 
   // Try to start USB (necessary for Leonardo board)
   int startTime = millis();
@@ -107,7 +110,7 @@ void setup()
     }
   }
   Serial.begin(9600);
-  Serial.println("Reset");
+  Serial.println(F("Reset"));
 
   // Set ADC reference from AVCC, set clock prescaler 1:16
   adcSetup(ADCRefSupply, 4);
@@ -120,32 +123,59 @@ void setup()
   ICR1   = (F_CPU / 64 / fskBaudrate) - 1;
   TIMSK1 = _BV(TOIE1);
 
-  // Initialize GPS software serial
+  // Initialize GPS software serial receiver
   gpsBegin();
 
+  bus.setSlow();  
+
+  // Restore configuration from EEPROM
   Config::restore();
   packetizer.setPayloadName(Config::config.payloadName);
 
+  // Read persistent state
+  eeprom_read_block((void *)&gResetState, &nvResetState, sizeof(ResetState));
+
   // Enable interrupts
   sei();
-  
+
+  // Print some debug info
   Config::config.payloadName.print();
-  Serial.print(" ver. ");
+  Serial.print(F(" ver. "));
   Serial.println(compile_date);
 
+  // Try to initialize barometer
   if (barometer.initialize()) {
-    Serial.println("Barometer OK");
+    Serial.println(F("Barometer OK"));
   }
   else {
-    Serial.println("No barometer found");
+    Serial.println(F("No barometer found"));
   }
 
   // Check CRC algorithm validity
   CRC16_CCITT crc;
   uint16_t checksum = crc.update("habitat");
-  Serial.println((checksum == 0x3EFB) ? "CRC ok" : "CRC error");
-  
-  Serial.print("> ");
+  Serial.println((checksum == 0x3EFB) ? F("CRC ok") : F("CRC error"));
+
+  // Check safe/arm pin
+  if (pinARM.read() == 0) {
+    // Pin removed
+
+    // Increase reset counter
+    gResetState.resetCount++;
+    eeprom_update_block((void *)&gResetState, &nvResetState, sizeof(ResetState));
+
+    Serial.print(F("Reset #")); Serial.print(gResetState.resetCount);
+    Serial.println(F("... restoring state from EEPROM"));
+    if (gResetState.sentenceID != 0xFFFF) {
+      packetizer.sentenceID = gResetState.sentenceID + 50;      // Allow for some number of transmitted packets
+      Serial.print(F("Sentence ID: ")); Serial.println(packetizer.sentenceID);
+      gResetState.gpsInfo.print();
+      flightData.updateGPS(gResetState.gpsInfo);
+    }
+  }
+  else {
+    // Pin present
+  }  
 }
 
 
@@ -168,7 +198,6 @@ void cameraCommand(uint8_t command) {
   7 - executing command (RO)
   */
 
-  bus.setSlow();
   bus.write(0x23, &command, 1);
 }
 
@@ -182,7 +211,6 @@ void cameraStop() {
 
 uint8_t cameraStatus() {
   uint8_t status;
-  bus.setSlow();
   bus.read(0x23, &status, 1);
   return status;
 }
@@ -302,9 +330,12 @@ void parseCommand(const char *command)
         break;
       case kCommandId: Config::config.payloadName.print(); Serial.println(); break;     
       case kCommandTX: Serial.println(Config::config.enableTX); break;     
-      case kCommandPkt: Serial.print((const char *)packetizer.getPacketBuffer()); break;
+      case kCommandPkt: 
+        packetizer.makePacket(flightData);
+        Serial.print((const char *)packetizer.getPacketBuffer()); 
+        break;
       case kCommandStat:       
-        Serial.print("Uptime: "); Serial.println(millis() / 1000);
+        Serial.print("Uptime: "); Serial.println(gTimeSinceReset);
         gpsParser.gpsInfo.print();
         flightData.print();
         break;
@@ -317,10 +348,148 @@ void parseCommand(const char *command)
   }
 }
 
-const char *testString = "AAAAA";
+
+void oncePerSecond() {
+
+  static uint8_t camCount;
+    if (++camCount >= 5) {
+      camCount = 0;
+
+      gCameraStatus = cameraStatus();
+      
+      // Check safe/arm pin
+      if (pinARM.read() == 0) {    
+        // Try to start camera recording
+        if (0 == (gCameraStatus & 1)) {
+          cameraRecord();
+        }      
+      }
+      else {
+        // Try to stop camera recording
+        if (1 == (gCameraStatus & 1)) {
+          cameraStop();
+        }      
+      }
+
+      if (barometer.update()) {
+        flightData.pressure = barometer.getPressure();
+        flightData.barometricAltitude = barometer.getAltitude();
+      }
+    }
+
+  // Check safe/arm pin
+  if (pinARM.read() == 0) {
+    // Pin removed
+    if (gState != STATE_FLIGHT) {
+      Serial.println(F("STATE -> FLIGHT"));
+      gState = STATE_FLIGHT;
+    }
+
+    if (flightData.altitude < kAltitudeThreshold) {
+      buzzerSet(kBuzzerPattern1, 60);       // Retrieval pattern
+      ledSet(kLEDPattern2, 60);             // Slow short flashing
+    }
+    else {
+      ledSet(0, 0);             // No flashing of green LED above threshold
+      buzzerSet(0, 0);          // Silence
+    }
+  }
+  else {
+    // Pin present
+    if (gState != STATE_SAFE) {
+      Serial.println(F("STATE -> SAFE"));
+      gState = STATE_SAFE;
+      gTimeToFix = 0;
+      
+      gResetState.clear();
+      packetizer.sentenceID = gResetState.sentenceID;
+    }
+
+    // Indicate fix by flashing LED
+    if (gpsParser.gpsInfo.fix == '3') {
+      // 3D fix
+      gTimeToFix = 0;
+      ledSet(kLEDPattern1, 30);  // Slow 50% flashing
+    }
+    else {
+      // No GPS fix or 2D fix
+      gTimeToFix++;
+      ledSet(kLEDPattern1, 5);   // Fast 50% flashing
+    }
+
+    // Check for GPS fix timeout
+    if (gTimeToFix > kFixTimeout) {
+      // Indicate error
+      buzzerSet(kBuzzerPattern2, 30); 
+    }
+    else {
+      buzzerSet(0, 0);           // Silence      
+    }
+  }
+
+  // Check time since reset and reflect it in flight status
+  if (gState == STATE_FLIGHT && gTimeSinceReset < 600) {
+    flightData.status |= _BV(kStatusAfterReset);
+  }
+  else {
+    flightData.status &= ~_BV(kStatusAfterReset);
+  }
+
+  // Check GPS fix
+  if (gpsParser.gpsInfo.fix != '3') {
+    flightData.status |= _BV(kStatusNoGPSLock);
+  }
+  else {
+    flightData.status &= ~_BV(kStatusNoGPSLock);
+  }
+  
+  // Check camera
+  if (gState == STATE_FLIGHT && 0 == (gCameraStatus & 1)) {
+    flightData.status |= _BV(kStatusCameraOff);
+  }
+  else {
+    flightData.status &= ~_BV(kStatusCameraOff);
+  }
+
+  flightData.updateGPS( gpsParser.gpsInfo );
+  flightData.updateTemperature();
+
+
+  // Check TX time division
+  int8_t minutes = flightData.getMinutes();
+  int8_t seconds = flightData.getSeconds();
+  if (minutes >= 0) {     // Check for valid time
+    uint8_t myId = Config::getMyID(); // Get the last character of payload name
+    bool myTurn = myId == 0 || (minutes % Config::getTimeSlots() == (myId - 1));
+
+    if (myTurn || gState == STATE_SAFE) {
+      if (gTXState == TXSTATE_IDLE) {
+        gTXState = TXSTATE_CARRIER;
+        if (Config::config.enableTX) transmitter.enable();
+      }
+      else if (gTXState == TXSTATE_CARRIER && seconds >= 10) {
+        gTXState = TXSTATE_TRANSMIT;
+      }
+    }
+    else {
+      gTXState = TXSTATE_IDLE;
+    }
+  }
+  else {
+    gTXState = TXSTATE_IDLE;
+  }
+
+  
+}
+
 
 void loop() 
 {
+  set_sleep_mode(SLEEP_MODE_IDLE);
+  sleep_enable();
+  sleep_mode();
+  sleep_disable();
+
   // Read GPS serial data
   while (gpsAvailable() > 0) {
     char c = gpsRead();
@@ -328,7 +497,7 @@ void loop()
     gpsParser.parse(c);
   }
 
-  static FString<32> consoleCmd;
+  static FString<16> consoleCmd;
 
   // Read serial console data
   while (Serial.available() > 0) {
@@ -346,8 +515,7 @@ void loop()
     }
   }
 
-  static uint8_t preambleIdx;
-  
+  // Check radio transmitter state and queue new data if necessary
   switch (gTXState) {
     case TXSTATE_IDLE:
       if (!transmitter.isBusy()) {
@@ -355,30 +523,16 @@ void loop()
       }
       break;
 
-    case TXSTATE_PREAMBLE:
-      if (!transmitter.isBusy()) {
-        if (preambleIdx < 80) {
-          transmitter.transmit((const uint8_t *)"RY", 2);
-        }
-        else {
-          transmitter.transmit((const uint8_t *)"\r\n", 2);
-          if (preambleIdx >= 82) {
-            gTXState = TXSTATE_TRANSMIT;
-            preambleIdx = 0;
-          }
-        }
-        preambleIdx++;
-      }
-      break;
     case TXSTATE_TRANSMIT:
-      if (!transmitter.isBusy()) {       
+      if (Config::config.enableTX && !transmitter.isBusy()) {       
         packetizer.makePacket(flightData);
+        //Serial.print((const char *)packetizer.getPacketBuffer());
         transmitter.transmit(packetizer.getPacketBuffer(), packetizer.getPacketLength() - 1);
       }
       break;
     case TXSTATE_TEST:
       if (!transmitter.isBusy()) {     
-        transmitter.transmit(testString, 5);
+        transmitter.transmit(txTestString, txTestStringLength);
       }
       break;
   }
@@ -387,63 +541,21 @@ void loop()
   if (gFlags & (1 << FLAG_SECOND)) {
     gFlags &= ~(1 << FLAG_SECOND);
 
-    // Indicate fix by flashing LED
-    char fix = gpsParser.gpsInfo.fix;
-    if (fix == '3') {
-      ledPeriod = 300;
-    }
-    else ledPeriod = 30;
-    ledBlink = true;
-
-    /*
-    static bool txPhase;
-    if (gTXState == TXSTATE_TEST) {
-      txPhase = !txPhase;
-      if (txPhase) transmitter.mark();
-      else transmitter.space();
-    }
-    */
-
-    if (barometer.update()) {
-      flightData.pressure = barometer.getPressure();
-      flightData.barometricAltitude = barometer.getAltitude();
-    }
-
-    //gpsParser.gpsInfo.print();
-    flightData.updateGPS( gpsParser.gpsInfo );
-    flightData.updateTemperature();
-
-    if (Config::config.enableTX) {
-      // Check TX time division
-      int8_t minutes = flightData.getMinutes();
-      int8_t seconds = flightData.getSeconds();
-      if (minutes >= 0) {     // Check for valid time
-        char myId = Config::config.payloadName[-1]; // Get the last character of payload name
-        if (myId >= '0' && myId <= '9') {
-          myId -= '0';
-          if (minutes % 6 == myId) {
-            if (gTXState == TXSTATE_IDLE) {
-              gTXState = TXSTATE_CARRIER;
-              transmitter.enable();
-            }
-            else if (gTXState == TXSTATE_CARRIER && seconds >= 10) {
-              gTXState = TXSTATE_TRANSMIT;
-            }
-          }
-          else {
-            gTXState = TXSTATE_IDLE;
-          }
-        }
-      }    
-    }
-    else {
-      transmitter.disable();
-    }
+    oncePerSecond();
   }
+  if (gFlags & (1 << FLAG_MINUTE)) {
+    gFlags &= ~(1 << FLAG_MINUTE);
 
-  delay(1);
+    // Store last GPS lock info
+    Serial.println("Saving state info to EEPROM");
+    if (gpsParser.gpsInfo.fix == '3' || gpsParser.gpsInfo.fix == '2') {
+      gpsParser.gpsInfo.print();
+      gResetState.gpsInfo = gpsParser.gpsInfo;
+    }
+    gResetState.sentenceID = packetizer.sentenceID;
+    eeprom_update_block((void *)&gResetState, &nvResetState, sizeof(ResetState));
+  }
 }
-
 
 /////////////////////////////////////////////////////////////////////////////////////////////////////
 // Timer1 overflow vector
@@ -453,23 +565,23 @@ void loop()
 //
 
 ISR(TIMER1_OVF_vect) { 
-  static word countLED;
   static word countToSecond;
-  static bool phase;
+  static byte countToMinute;
 
   transmitter.tick();
+  buzzerTick();
+  ledTick();
 
-  countLED++;
-  if (countLED > ledPeriod) {
-    pinLED.write(!ledBlink | phase);
-    phase = !phase;
-    countLED = 0;
-  }
-
-  countToSecond++;
-  if (countToSecond >= fskBaudrate) {
+  if (++countToSecond >= fskBaudrate) {
     gFlags |= (1 << FLAG_SECOND);
     countToSecond = 0;
+
+    gTimeSinceReset++;
+
+    if (++countToMinute >= 60) {
+      countToMinute = 0;
+      gFlags |= (1 << FLAG_MINUTE);
+    }
   }
 }
 
