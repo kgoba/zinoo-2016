@@ -51,11 +51,13 @@ struct ResetState {
   uint16_t  resetCount;
   uint16_t  sentenceID;
   GPSInfo   gpsInfo;
+  bool      ascentComplete;
 
   ResetState() {
   }
 
   void clear() {
+    ascentComplete = false;
     sentenceID = 1;
     resetCount = 0;
     gpsInfo.clear();    

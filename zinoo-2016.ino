@@ -70,6 +70,7 @@ State       gState;
 TXState     gTXState;
 uint16_t    gTimeToFix;
 uint8_t     gCameraStatus;
+bool        gOverrideTX;
 
 PinARM    pinARM;
 
@@ -351,6 +352,7 @@ void parseCommand(const char *command)
 
 void oncePerSecond() {
 
+  // Once per 5 seconds check camera status and read barometer
   static uint8_t camCount;
     if (++camCount >= 5) {
       camCount = 0;
@@ -377,25 +379,38 @@ void oncePerSecond() {
       }
     }
 
-  // Check safe/arm pin
+  // Check safe/arm pin and manage state transitions
   if (pinARM.read() == 0) {
-    // Pin removed
+    // Pin removed - FLIGHT mode
     if (gState != STATE_FLIGHT) {
       Serial.println(F("STATE -> FLIGHT"));
       gState = STATE_FLIGHT;
     }
 
     if (flightData.altitude < kAltitudeThreshold) {
+      // We are below altitude threshold - either ascending or descending
+      if (gResetState.ascentComplete) {
+        // We are in descent - enable permanent tx
+        gOverrideTX = true;
+      }
+      else {
+        gOverrideTX = false;
+      }
+      // Enable retrieval light & sound patterns
       buzzerSet(kBuzzerPattern1, 60);       // Retrieval pattern
       ledSet(kLEDPattern2, 60);             // Slow short flashing
     }
     else {
+      // We are in the clouds
+      gOverrideTX = false;
+      gResetState.ascentComplete = true;    // Mark that we will be descending
+      // Disable light & sound
       ledSet(0, 0);             // No flashing of green LED above threshold
       buzzerSet(0, 0);          // Silence
     }
   }
   else {
-    // Pin present
+    // Pin present - SAFE mode
     if (gState != STATE_SAFE) {
       Serial.println(F("STATE -> SAFE"));
       gState = STATE_SAFE;
@@ -454,29 +469,34 @@ void oncePerSecond() {
   flightData.updateGPS( gpsParser.gpsInfo );
   flightData.updateTemperature();
 
-
-  // Check TX time division
-  int8_t minutes = flightData.getMinutes();
-  int8_t seconds = flightData.getSeconds();
-  if (minutes >= 0) {     // Check for valid time
-    uint8_t myId = Config::getMyID(); // Get the last character of payload name
-    bool myTurn = myId == 0 || (minutes % Config::getTimeSlots() == (myId - 1));
-
-    if (myTurn || gState == STATE_SAFE) {
-      if (gTXState == TXSTATE_IDLE) {
-        gTXState = TXSTATE_CARRIER;
-        if (Config::config.enableTX) transmitter.enable();
+  if (gOverrideTX) {
+    gTXState = TXSTATE_TRANSMIT;
+  }
+  else {
+    // Check TX time division
+    int8_t minutes = flightData.getMinutes();
+    int8_t seconds = flightData.getSeconds();
+    if (minutes >= 0) {     // Check for valid time
+      uint8_t myId = Config::getMyID(); // Get the last character of payload name
+      bool myTurn = myId == 0 || (minutes % Config::getTimeSlots() == (myId - 1));
+  
+      if (myTurn || gState == STATE_SAFE) {
+        if (gTXState == TXSTATE_IDLE) {
+          gTXState = TXSTATE_CARRIER;
+          //if (Config::config.enableTX) 
+          transmitter.enable();
+        }
+        else if (gTXState == TXSTATE_CARRIER && seconds >= 10) {
+          gTXState = TXSTATE_TRANSMIT;
+        }
       }
-      else if (gTXState == TXSTATE_CARRIER && seconds >= 10) {
-        gTXState = TXSTATE_TRANSMIT;
+      else {
+        gTXState = TXSTATE_IDLE;
       }
     }
     else {
       gTXState = TXSTATE_IDLE;
     }
-  }
-  else {
-    gTXState = TXSTATE_IDLE;
   }
 
   
@@ -524,7 +544,8 @@ void loop()
       break;
 
     case TXSTATE_TRANSMIT:
-      if (Config::config.enableTX && !transmitter.isBusy()) {       
+      //if (Config::config.enableTX)
+      if (!transmitter.isBusy()) {       
         packetizer.makePacket(flightData);
         //Serial.print((const char *)packetizer.getPacketBuffer());
         transmitter.transmit(packetizer.getPacketBuffer(), packetizer.getPacketLength() - 1);
